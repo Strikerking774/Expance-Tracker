@@ -1,0 +1,9 @@
+trips_data.json
+expenses_data.json
+users_data.json
+__pycache__/
+*.pyc
+.env
+*.xlsx
+*.pdf
+.vercel
