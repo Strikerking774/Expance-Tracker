@@ -7,9 +7,7 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# ============================================================
 # SUPABASE CONNECTION
-# ============================================================
 from supabase import create_client
 
 def get_db():
@@ -17,9 +15,7 @@ def get_db():
     key = os.environ.get("SUPABASE_KEY", "")
     return create_client(url, key)
 
-# ============================================================
 # SERVE FRONTEND
-# ============================================================
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1333,9 +1329,7 @@ HTML_CONTENT = """<!DOCTYPE html>
 def serve_index():
     return Response(HTML_CONTENT, mimetype="text/html")
 
-# ============================================================
 # TRIPS
-# ============================================================
 @app.route("/api/trips", methods=["GET"])
 def get_trips():
     try:
@@ -1391,9 +1385,7 @@ def delete_trip(trip_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ============================================================
 # EXPENSES
-# ============================================================
 @app.route("/api/expenses", methods=["GET"])
 def get_expenses():
     try:
@@ -1437,9 +1429,7 @@ def delete_expense(expense_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ============================================================
 # SUMMARY
-# ============================================================
 @app.route("/api/trips/<trip_id>/summary", methods=["GET"])
 def get_trip_summary(trip_id):
     try:
@@ -1448,18 +1438,14 @@ def get_trip_summary(trip_id):
         if not trip_result.data:
             return jsonify({"error": "Trip not found"}), 404
         trip = trip_result.data[0]
-
         expenses_result = db.table("expenses").select("*").eq("trip_id", trip_id).execute()
         trip_expenses = expenses_result.data
-
         total_spent = sum(float(e["amount"]) for e in trip_expenses)
         remaining = (float(trip["budget"]) - total_spent) if trip["budget"] is not None else None
-
         categories = {}
         for e in trip_expenses:
             cat = e["category"]
             categories[cat] = categories.get(cat, 0) + float(e["amount"])
-
         return jsonify({
             "trip": trip,
             "total_budget": float(trip["budget"]) if trip["budget"] is not None else None,
@@ -1471,44 +1457,34 @@ def get_trip_summary(trip_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ============================================================
 # EXCEL EXPORT
-# ============================================================
 @app.route("/api/export/<trip_id>", methods=["GET"])
 def export_excel(trip_id):
     try:
         import pandas as pd
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-
         db = get_db()
         trip = db.table("trips").select("*").eq("id", trip_id).execute().data[0]
         trip_expenses = db.table("expenses").select("*").eq("trip_id", trip_id).execute().data
-
         if not trip_expenses:
             return jsonify({"error": "No expenses to export"}), 400
-
         df = pd.DataFrame(trip_expenses)[["date","time","category","amount","person","description"]]
         df.columns = ["Date","Time","Category","Amount","Person","Description"]
-
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Expenses", startrow=4)
             ws = writer.sheets["Expenses"]
-
             ws["A1"] = f"TRIP: {trip['name']}"
             ws["A1"].font = Font(size=16, bold=True, color="FFFFFF")
             ws["A1"].fill = PatternFill(start_color="667eea", end_color="667eea", fill_type="solid")
             ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
             ws.merge_cells("A1:F1")
             ws.row_dimensions[1].height = 30
-
             ws["A2"] = f"Budget: Rs.{float(trip['budget']):,.2f}" if trip["budget"] else "Budget: Not Set"
             ws["A2"].font = Font(size=11, bold=True)
-
             hf = PatternFill(start_color="1e293b", end_color="1e293b", fill_type="solid")
-            border = Border(left=Side(style="thin",color="e2e8f0"), right=Side(style="thin",color="e2e8f0"),
-                           top=Side(style="thin",color="e2e8f0"), bottom=Side(style="thin",color="e2e8f0"))
-
+            border = Border(left=Side(style="thin",color="e2e8f0"),right=Side(style="thin",color="e2e8f0"),
+                           top=Side(style="thin",color="e2e8f0"),bottom=Side(style="thin",color="e2e8f0"))
             for col in range(1, 7):
                 cell = ws.cell(row=5, column=col)
                 cell.fill = hf
@@ -1516,7 +1492,6 @@ def export_excel(trip_id):
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 cell.border = border
             ws.row_dimensions[5].height = 25
-
             for row in range(6, len(df) + 6):
                 for col in range(1, 7):
                     cell = ws.cell(row=row, column=col)
@@ -1525,15 +1500,12 @@ def export_excel(trip_id):
                         cell.number_format = "#,##0.00"
                         cell.alignment = Alignment(horizontal="right", vertical="center")
                         cell.font = Font(bold=True)
-
             for col, width in zip("ABCDEF", [12,10,20,15,18,40]):
                 ws.column_dimensions[col].width = width
-
             last_row = len(df) + 7
             sf = PatternFill(start_color="f8fafc", end_color="f8fafc", fill_type="solid")
-            tb = Border(left=Side(style="medium",color="1e293b"), right=Side(style="medium",color="1e293b"),
-                       top=Side(style="medium",color="1e293b"), bottom=Side(style="medium",color="1e293b"))
-
+            tb = Border(left=Side(style="medium",color="1e293b"),right=Side(style="medium",color="1e293b"),
+                       top=Side(style="medium",color="1e293b"),bottom=Side(style="medium",color="1e293b"))
             ws[f"D{last_row}"] = "TOTAL SPENT:"
             ws[f"D{last_row}"].font = Font(bold=True, size=11)
             ws[f"D{last_row}"].fill = sf
@@ -1546,7 +1518,6 @@ def export_excel(trip_id):
             ws[f"E{last_row}"].border = tb
             ws[f"E{last_row}"].alignment = Alignment(horizontal="right")
             ws.row_dimensions[last_row].height = 25
-
             if trip["budget"] is not None:
                 remaining = float(trip["budget"]) - sum(float(e["amount"]) for e in trip_expenses)
                 rc = "10b981" if remaining >= 0 else "ef4444"
@@ -1573,11 +1544,9 @@ def export_excel(trip_id):
                 ws[f"E{last_row+2}"].alignment = Alignment(horizontal="right")
                 ws.row_dimensions[last_row+1].height = 25
                 ws.row_dimensions[last_row+2].height = 30
-
             footer_row = last_row + 4 if trip["budget"] else last_row + 2
             ws[f"A{footer_row}"] = f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}"
             ws[f"A{footer_row}"].font = Font(size=9, italic=True, color="64748b")
-
         output.seek(0)
         filename = f"{trip['name'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.xlsx"
         return send_file(output, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1585,9 +1554,7 @@ def export_excel(trip_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ============================================================
 # PDF EXPORT
-# ============================================================
 @app.route("/api/export-pdf/<trip_id>", methods=["GET"])
 def export_pdf(trip_id):
     try:
@@ -1597,24 +1564,19 @@ def export_pdf(trip_id):
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import inch
         from reportlab.lib.enums import TA_CENTER
-
         db = get_db()
         trip = db.table("trips").select("*").eq("id", trip_id).execute().data[0]
         trip_expenses = db.table("expenses").select("*").eq("trip_id", trip_id).execute().data
-
         if not trip_expenses:
             return jsonify({"error": "No expenses to export"}), 400
-
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
         elements = []
         styles = getSampleStyleSheet()
-
         title_style = ParagraphStyle("T", parent=styles["Heading1"], fontSize=24,
             textColor=colors.HexColor("#667eea"), spaceAfter=30, alignment=TA_CENTER, fontName="Helvetica-Bold")
         elements.append(Paragraph(f"Trip: {trip['name']}", title_style))
         elements.append(Spacer(1, 12))
-
         total_spent = sum(float(e["amount"]) for e in trip_expenses)
         budget_data = []
         if trip["budget"]:
@@ -1622,7 +1584,6 @@ def export_pdf(trip_id):
         budget_data.append(["Total Spent:", f"Rs.{total_spent:,.2f}"])
         if trip["budget"]:
             budget_data.append(["Remaining:", f"Rs.{float(trip['budget']) - total_spent:,.2f}"])
-
         bt = Table(budget_data, colWidths=[2*inch, 2*inch])
         bt.setStyle(TableStyle([
             ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#f8fafc")),
@@ -1634,13 +1595,11 @@ def export_pdf(trip_id):
         ]))
         elements.append(bt)
         elements.append(Spacer(1, 30))
-
         data = [["Date","Category","Amount","Person","Description"]]
         for e in trip_expenses:
             desc = e.get("description") or "-"
             data.append([e["date"], e["category"], f"Rs.{float(e['amount']):,.2f}",
                         e.get("person") or "-", desc[:50] + "..." if len(desc) > 50 else desc])
-
         table = Table(data, colWidths=[1*inch, 1.2*inch, 1*inch, 1*inch, 2.3*inch])
         table.setStyle(TableStyle([
             ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1e293b")),
@@ -1660,7 +1619,6 @@ def export_pdf(trip_id):
         elements.append(table)
         doc.build(elements)
         buffer.seek(0)
-
         filename = f"{trip['name'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
         return send_file(buffer, mimetype="application/pdf", as_attachment=True, download_name=filename)
     except Exception as e:
