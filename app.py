@@ -2,20 +2,23 @@ from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 from datetime import datetime
 from io import BytesIO
-import uuid
+import os
 
 app = Flask(__name__)
 CORS(app)
 
 # ============================================================
-# IN-MEMORY STORAGE (Works on Vercel - data resets on restart)
-# For permanent storage, connect Supabase later
+# SUPABASE CONNECTION
 # ============================================================
-TRIPS = []
-EXPENSES = []
+from supabase import create_client
+
+def get_db():
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY", "")
+    return create_client(url, key)
 
 # ============================================================
-# SERVE FRONTEND - Embedded HTML
+# SERVE FRONTEND
 # ============================================================
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="en">
@@ -1326,160 +1329,191 @@ HTML_CONTENT = """<!DOCTYPE html>
 </html>
 """
 
-@app.route('/')
+@app.route("/")
 def serve_index():
-    return Response(HTML_CONTENT, mimetype='text/html')
+    return Response(HTML_CONTENT, mimetype="text/html")
 
 # ============================================================
-# TRIP ROUTES
+# TRIPS
 # ============================================================
-@app.route('/api/trips', methods=['GET'])
+@app.route("/api/trips", methods=["GET"])
 def get_trips():
-    return jsonify(TRIPS)
+    try:
+        db = get_db()
+        result = db.table("trips").select("*").order("created_at").execute()
+        return jsonify(result.data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/trips', methods=['POST'])
+@app.route("/api/trips", methods=["POST"])
 def create_trip():
-    data = request.json
-    budget_value = data.get('budget')
-    budget = float(budget_value) if budget_value and str(budget_value).strip() else None
+    try:
+        data = request.json
+        db = get_db()
+        budget_value = data.get("budget")
+        budget = float(budget_value) if budget_value and str(budget_value).strip() else None
+        new_trip = {
+            "name": data.get("name"),
+            "budget": budget,
+            "status": "ongoing",
+            "created_at": datetime.now().isoformat()
+        }
+        result = db.table("trips").insert(new_trip).execute()
+        return jsonify(result.data[0]), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    new_trip = {
-        'id': str(uuid.uuid4()),
-        'name': data.get('name'),
-        'budget': budget,
-        'status': 'ongoing',
-        'created_at': datetime.now().isoformat()
-    }
-    TRIPS.append(new_trip)
-    return jsonify(new_trip), 201
-
-@app.route('/api/trips/<trip_id>', methods=['PUT'])
+@app.route("/api/trips/<trip_id>", methods=["PUT"])
 def update_trip(trip_id):
-    data = request.json
-    for trip in TRIPS:
-        if trip['id'] == trip_id:
-            if 'status' in data:
-                trip['status'] = data['status']
-            if 'name' in data:
-                trip['name'] = data['name']
-            if 'budget' in data:
-                bv = data['budget']
-                trip['budget'] = float(bv) if bv and str(bv).strip() else None
-            return jsonify(trip)
-    return jsonify({'error': 'Trip not found'}), 404
+    try:
+        data = request.json
+        db = get_db()
+        update_data = {}
+        if "status" in data:
+            update_data["status"] = data["status"]
+        if "name" in data:
+            update_data["name"] = data["name"]
+        if "budget" in data:
+            bv = data["budget"]
+            update_data["budget"] = float(bv) if bv and str(bv).strip() else None
+        result = db.table("trips").update(update_data).eq("id", trip_id).execute()
+        return jsonify(result.data[0])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/trips/<trip_id>', methods=['DELETE'])
+@app.route("/api/trips/<trip_id>", methods=["DELETE"])
 def delete_trip(trip_id):
-    global TRIPS, EXPENSES
-    TRIPS = [t for t in TRIPS if t['id'] != trip_id]
-    EXPENSES = [e for e in EXPENSES if e['trip_id'] != trip_id]
-    return jsonify({'message': 'Trip deleted'})
+    try:
+        db = get_db()
+        db.table("expenses").delete().eq("trip_id", trip_id).execute()
+        db.table("trips").delete().eq("id", trip_id).execute()
+        return jsonify({"message": "Trip deleted"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# EXPENSE ROUTES
+# EXPENSES
 # ============================================================
-@app.route('/api/expenses', methods=['GET'])
+@app.route("/api/expenses", methods=["GET"])
 def get_expenses():
-    trip_id = request.args.get('trip_id')
-    if trip_id:
-        return jsonify([e for e in EXPENSES if e['trip_id'] == trip_id])
-    return jsonify(EXPENSES)
+    try:
+        trip_id = request.args.get("trip_id")
+        db = get_db()
+        if trip_id:
+            result = db.table("expenses").select("*").eq("trip_id", trip_id).order("created_at").execute()
+        else:
+            result = db.table("expenses").select("*").order("created_at").execute()
+        return jsonify(result.data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/expenses', methods=['POST'])
+@app.route("/api/expenses", methods=["POST"])
 def add_expense():
-    data = request.json
-    new_expense = {
-        'id': str(uuid.uuid4()),
-        'trip_id': data.get('trip_id'),
-        'category': data.get('category'),
-        'amount': float(data.get('amount')),
-        'description': data.get('description', ''),
-        'person': data.get('person', ''),
-        'image': data.get('image', ''),
-        'date': datetime.now().strftime('%Y-%m-%d'),
-        'time': datetime.now().strftime('%H:%M:%S')
-    }
-    EXPENSES.append(new_expense)
-    return jsonify(new_expense), 201
+    try:
+        data = request.json
+        db = get_db()
+        new_expense = {
+            "trip_id": data.get("trip_id"),
+            "category": data.get("category"),
+            "amount": float(data.get("amount")),
+            "description": data.get("description", ""),
+            "person": data.get("person", ""),
+            "image": data.get("image", ""),
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "created_at": datetime.now().isoformat()
+        }
+        result = db.table("expenses").insert(new_expense).execute()
+        return jsonify(result.data[0]), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/expenses/<expense_id>', methods=['DELETE'])
+@app.route("/api/expenses/<expense_id>", methods=["DELETE"])
 def delete_expense(expense_id):
-    global EXPENSES
-    EXPENSES = [e for e in EXPENSES if e['id'] != expense_id]
-    return jsonify({'message': 'Expense deleted'})
+    try:
+        db = get_db()
+        db.table("expenses").delete().eq("id", expense_id).execute()
+        return jsonify({"message": "Expense deleted"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ============================================================
-# TRIP SUMMARY
+# SUMMARY
 # ============================================================
-@app.route('/api/trips/<trip_id>/summary', methods=['GET'])
+@app.route("/api/trips/<trip_id>/summary", methods=["GET"])
 def get_trip_summary(trip_id):
-    trip = next((t for t in TRIPS if t['id'] == trip_id), None)
-    if not trip:
-        return jsonify({'error': 'Trip not found'}), 404
+    try:
+        db = get_db()
+        trip_result = db.table("trips").select("*").eq("id", trip_id).execute()
+        if not trip_result.data:
+            return jsonify({"error": "Trip not found"}), 404
+        trip = trip_result.data[0]
 
-    trip_expenses = [e for e in EXPENSES if e['trip_id'] == trip_id]
-    total_spent = sum(float(e['amount']) for e in trip_expenses)
-    remaining = (float(trip['budget']) - total_spent) if trip['budget'] is not None else None
+        expenses_result = db.table("expenses").select("*").eq("trip_id", trip_id).execute()
+        trip_expenses = expenses_result.data
 
-    categories = {}
-    for e in trip_expenses:
-        cat = e['category']
-        categories[cat] = categories.get(cat, 0) + float(e['amount'])
+        total_spent = sum(float(e["amount"]) for e in trip_expenses)
+        remaining = (float(trip["budget"]) - total_spent) if trip["budget"] is not None else None
 
-    return jsonify({
-        'trip': trip,
-        'total_budget': float(trip['budget']) if trip['budget'] is not None else None,
-        'total_spent': total_spent,
-        'remaining': remaining,
-        'expense_count': len(trip_expenses),
-        'categories': categories
-    })
+        categories = {}
+        for e in trip_expenses:
+            cat = e["category"]
+            categories[cat] = categories.get(cat, 0) + float(e["amount"])
+
+        return jsonify({
+            "trip": trip,
+            "total_budget": float(trip["budget"]) if trip["budget"] is not None else None,
+            "total_spent": total_spent,
+            "remaining": remaining,
+            "expense_count": len(trip_expenses),
+            "categories": categories
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ============================================================
 # EXCEL EXPORT
 # ============================================================
-@app.route('/api/export/<trip_id>', methods=['GET'])
+@app.route("/api/export/<trip_id>", methods=["GET"])
 def export_excel(trip_id):
     try:
         import pandas as pd
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-        trip = next((t for t in TRIPS if t['id'] == trip_id), None)
-        if not trip:
-            return jsonify({'error': 'Trip not found'}), 404
+        db = get_db()
+        trip = db.table("trips").select("*").eq("id", trip_id).execute().data[0]
+        trip_expenses = db.table("expenses").select("*").eq("trip_id", trip_id).execute().data
 
-        trip_expenses = [e for e in EXPENSES if e['trip_id'] == trip_id]
         if not trip_expenses:
-            return jsonify({'error': 'No expenses to export'}), 400
+            return jsonify({"error": "No expenses to export"}), 400
 
-        df = pd.DataFrame(trip_expenses)[['date','time','category','amount','person','description']]
-        df.columns = ['Date','Time','Category','Amount','Person','Description']
+        df = pd.DataFrame(trip_expenses)[["date","time","category","amount","person","description"]]
+        df.columns = ["Date","Time","Category","Amount","Person","Description"]
 
         output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Expenses', startrow=4)
-            ws = writer.sheets['Expenses']
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Expenses", startrow=4)
+            ws = writer.sheets["Expenses"]
 
-            ws['A1'] = f'TRIP: {trip["name"]}'
-            ws['A1'].font = Font(size=16, bold=True, color='FFFFFF')
-            ws['A1'].fill = PatternFill(start_color='667eea', end_color='667eea', fill_type='solid')
-            ws['A1'].alignment = Alignment(horizontal='left', vertical='center')
-            ws.merge_cells('A1:F1')
+            ws["A1"] = f"TRIP: {trip['name']}"
+            ws["A1"].font = Font(size=16, bold=True, color="FFFFFF")
+            ws["A1"].fill = PatternFill(start_color="667eea", end_color="667eea", fill_type="solid")
+            ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
+            ws.merge_cells("A1:F1")
             ws.row_dimensions[1].height = 30
 
-            ws['A2'] = f'Budget: Rs.{float(trip["budget"]):,.2f}' if trip['budget'] else 'Budget: Not Set'
-            ws['A2'].font = Font(size=11, bold=True)
+            ws["A2"] = f"Budget: Rs.{float(trip['budget']):,.2f}" if trip["budget"] else "Budget: Not Set"
+            ws["A2"].font = Font(size=11, bold=True)
 
-            hf = PatternFill(start_color='1e293b', end_color='1e293b', fill_type='solid')
-            hfont = Font(bold=True, color='FFFFFF', size=11)
-            border = Border(left=Side(style='thin',color='e2e8f0'), right=Side(style='thin',color='e2e8f0'),
-                           top=Side(style='thin',color='e2e8f0'), bottom=Side(style='thin',color='e2e8f0'))
+            hf = PatternFill(start_color="1e293b", end_color="1e293b", fill_type="solid")
+            border = Border(left=Side(style="thin",color="e2e8f0"), right=Side(style="thin",color="e2e8f0"),
+                           top=Side(style="thin",color="e2e8f0"), bottom=Side(style="thin",color="e2e8f0"))
 
             for col in range(1, 7):
                 cell = ws.cell(row=5, column=col)
                 cell.fill = hf
-                cell.font = hfont
-                cell.alignment = Alignment(horizontal='center', vertical='center')
+                cell.font = Font(bold=True, color="FFFFFF", size=11)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
                 cell.border = border
             ws.row_dimensions[5].height = 25
 
@@ -1488,73 +1522,73 @@ def export_excel(trip_id):
                     cell = ws.cell(row=row, column=col)
                     cell.border = border
                     if col == 4:
-                        cell.number_format = '#,##0.00'
-                        cell.alignment = Alignment(horizontal='right', vertical='center')
+                        cell.number_format = "#,##0.00"
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
                         cell.font = Font(bold=True)
 
-            for col, width in zip('ABCDEF', [12,10,20,15,18,40]):
+            for col, width in zip("ABCDEF", [12,10,20,15,18,40]):
                 ws.column_dimensions[col].width = width
 
             last_row = len(df) + 7
-            sf = PatternFill(start_color='f8fafc', end_color='f8fafc', fill_type='solid')
-            tb = Border(left=Side(style='medium',color='1e293b'), right=Side(style='medium',color='1e293b'),
-                       top=Side(style='medium',color='1e293b'), bottom=Side(style='medium',color='1e293b'))
+            sf = PatternFill(start_color="f8fafc", end_color="f8fafc", fill_type="solid")
+            tb = Border(left=Side(style="medium",color="1e293b"), right=Side(style="medium",color="1e293b"),
+                       top=Side(style="medium",color="1e293b"), bottom=Side(style="medium",color="1e293b"))
 
-            ws[f'D{last_row}'] = 'TOTAL SPENT:'
-            ws[f'D{last_row}'].font = Font(bold=True, size=11)
-            ws[f'D{last_row}'].fill = sf
-            ws[f'D{last_row}'].border = tb
-            ws[f'D{last_row}'].alignment = Alignment(horizontal='right')
-            ws[f'E{last_row}'] = sum(float(e['amount']) for e in trip_expenses)
-            ws[f'E{last_row}'].font = Font(bold=True, size=12)
-            ws[f'E{last_row}'].number_format = '#,##0.00'
-            ws[f'E{last_row}'].fill = sf
-            ws[f'E{last_row}'].border = tb
-            ws[f'E{last_row}'].alignment = Alignment(horizontal='right')
+            ws[f"D{last_row}"] = "TOTAL SPENT:"
+            ws[f"D{last_row}"].font = Font(bold=True, size=11)
+            ws[f"D{last_row}"].fill = sf
+            ws[f"D{last_row}"].border = tb
+            ws[f"D{last_row}"].alignment = Alignment(horizontal="right")
+            ws[f"E{last_row}"] = sum(float(e["amount"]) for e in trip_expenses)
+            ws[f"E{last_row}"].font = Font(bold=True, size=12)
+            ws[f"E{last_row}"].number_format = "#,##0.00"
+            ws[f"E{last_row}"].fill = sf
+            ws[f"E{last_row}"].border = tb
+            ws[f"E{last_row}"].alignment = Alignment(horizontal="right")
             ws.row_dimensions[last_row].height = 25
 
-            if trip['budget'] is not None:
-                remaining = float(trip['budget']) - sum(float(e['amount']) for e in trip_expenses)
-                rc = '10b981' if remaining >= 0 else 'ef4444'
-                ws[f'D{last_row+1}'] = 'TRIP BUDGET:'
-                ws[f'D{last_row+1}'].font = Font(bold=True, size=11)
-                ws[f'D{last_row+1}'].fill = sf
-                ws[f'D{last_row+1}'].border = tb
-                ws[f'D{last_row+1}'].alignment = Alignment(horizontal='right')
-                ws[f'E{last_row+1}'] = float(trip['budget'])
-                ws[f'E{last_row+1}'].number_format = '#,##0.00'
-                ws[f'E{last_row+1}'].fill = sf
-                ws[f'E{last_row+1}'].border = tb
-                ws[f'E{last_row+1}'].alignment = Alignment(horizontal='right')
-                ws[f'D{last_row+2}'] = 'REMAINING:'
-                ws[f'D{last_row+2}'].font = Font(bold=True, size=12, color='FFFFFF')
-                ws[f'D{last_row+2}'].fill = PatternFill(start_color=rc, end_color=rc, fill_type='solid')
-                ws[f'D{last_row+2}'].border = tb
-                ws[f'D{last_row+2}'].alignment = Alignment(horizontal='right')
-                ws[f'E{last_row+2}'] = remaining
-                ws[f'E{last_row+2}'].font = Font(bold=True, size=13, color='FFFFFF')
-                ws[f'E{last_row+2}'].number_format = '#,##0.00'
-                ws[f'E{last_row+2}'].fill = PatternFill(start_color=rc, end_color=rc, fill_type='solid')
-                ws[f'E{last_row+2}'].border = tb
-                ws[f'E{last_row+2}'].alignment = Alignment(horizontal='right')
+            if trip["budget"] is not None:
+                remaining = float(trip["budget"]) - sum(float(e["amount"]) for e in trip_expenses)
+                rc = "10b981" if remaining >= 0 else "ef4444"
+                ws[f"D{last_row+1}"] = "TRIP BUDGET:"
+                ws[f"D{last_row+1}"].font = Font(bold=True, size=11)
+                ws[f"D{last_row+1}"].fill = sf
+                ws[f"D{last_row+1}"].border = tb
+                ws[f"D{last_row+1}"].alignment = Alignment(horizontal="right")
+                ws[f"E{last_row+1}"] = float(trip["budget"])
+                ws[f"E{last_row+1}"].number_format = "#,##0.00"
+                ws[f"E{last_row+1}"].fill = sf
+                ws[f"E{last_row+1}"].border = tb
+                ws[f"E{last_row+1}"].alignment = Alignment(horizontal="right")
+                ws[f"D{last_row+2}"] = "REMAINING:"
+                ws[f"D{last_row+2}"].font = Font(bold=True, size=12, color="FFFFFF")
+                ws[f"D{last_row+2}"].fill = PatternFill(start_color=rc, end_color=rc, fill_type="solid")
+                ws[f"D{last_row+2}"].border = tb
+                ws[f"D{last_row+2}"].alignment = Alignment(horizontal="right")
+                ws[f"E{last_row+2}"] = remaining
+                ws[f"E{last_row+2}"].font = Font(bold=True, size=13, color="FFFFFF")
+                ws[f"E{last_row+2}"].number_format = "#,##0.00"
+                ws[f"E{last_row+2}"].fill = PatternFill(start_color=rc, end_color=rc, fill_type="solid")
+                ws[f"E{last_row+2}"].border = tb
+                ws[f"E{last_row+2}"].alignment = Alignment(horizontal="right")
                 ws.row_dimensions[last_row+1].height = 25
                 ws.row_dimensions[last_row+2].height = 30
 
-            footer_row = last_row + 4 if trip['budget'] else last_row + 2
-            ws[f'A{footer_row}'] = f'Generated: {datetime.now().strftime("%B %d, %Y at %I:%M %p")}'
-            ws[f'A{footer_row}'].font = Font(size=9, italic=True, color='64748b')
+            footer_row = last_row + 4 if trip["budget"] else last_row + 2
+            ws[f"A{footer_row}"] = f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}"
+            ws[f"A{footer_row}"].font = Font(size=9, italic=True, color="64748b")
 
         output.seek(0)
         filename = f"{trip['name'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.xlsx"
-        return send_file(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        return send_file(output, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         as_attachment=True, download_name=filename)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 # ============================================================
 # PDF EXPORT
 # ============================================================
-@app.route('/api/export-pdf/<trip_id>', methods=['GET'])
+@app.route("/api/export-pdf/<trip_id>", methods=["GET"])
 def export_pdf(trip_id):
     try:
         from reportlab.lib import colors
@@ -1564,75 +1598,74 @@ def export_pdf(trip_id):
         from reportlab.lib.units import inch
         from reportlab.lib.enums import TA_CENTER
 
-        trip = next((t for t in TRIPS if t['id'] == trip_id), None)
-        if not trip:
-            return jsonify({'error': 'Trip not found'}), 404
+        db = get_db()
+        trip = db.table("trips").select("*").eq("id", trip_id).execute().data[0]
+        trip_expenses = db.table("expenses").select("*").eq("trip_id", trip_id).execute().data
 
-        trip_expenses = [e for e in EXPENSES if e['trip_id'] == trip_id]
         if not trip_expenses:
-            return jsonify({'error': 'No expenses to export'}), 400
+            return jsonify({"error": "No expenses to export"}), 400
 
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
         elements = []
         styles = getSampleStyleSheet()
 
-        title_style = ParagraphStyle('T', parent=styles['Heading1'], fontSize=24,
-            textColor=colors.HexColor('#667eea'), spaceAfter=30, alignment=TA_CENTER, fontName='Helvetica-Bold')
+        title_style = ParagraphStyle("T", parent=styles["Heading1"], fontSize=24,
+            textColor=colors.HexColor("#667eea"), spaceAfter=30, alignment=TA_CENTER, fontName="Helvetica-Bold")
         elements.append(Paragraph(f"Trip: {trip['name']}", title_style))
         elements.append(Spacer(1, 12))
 
-        total_spent = sum(float(e['amount']) for e in trip_expenses)
+        total_spent = sum(float(e["amount"]) for e in trip_expenses)
         budget_data = []
-        if trip['budget']:
-            budget_data.append(['Trip Budget:', f"Rs.{float(trip['budget']):,.2f}"])
-        budget_data.append(['Total Spent:', f"Rs.{total_spent:,.2f}"])
-        if trip['budget']:
-            budget_data.append(['Remaining:', f"Rs.{float(trip['budget']) - total_spent:,.2f}"])
+        if trip["budget"]:
+            budget_data.append(["Trip Budget:", f"Rs.{float(trip['budget']):,.2f}"])
+        budget_data.append(["Total Spent:", f"Rs.{total_spent:,.2f}"])
+        if trip["budget"]:
+            budget_data.append(["Remaining:", f"Rs.{float(trip['budget']) - total_spent:,.2f}"])
 
         bt = Table(budget_data, colWidths=[2*inch, 2*inch])
         bt.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f8fafc')),
-            ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,-1), 12),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 12),
-            ('TOPPADDING', (0,0), (-1,-1), 12),
-            ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#e2e8f0'))
+            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#f8fafc")),
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
+            ("FONTSIZE", (0,0), (-1,-1), 12),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 12),
+            ("TOPPADDING", (0,0), (-1,-1), 12),
+            ("GRID", (0,0), (-1,-1), 1, colors.HexColor("#e2e8f0"))
         ]))
         elements.append(bt)
         elements.append(Spacer(1, 30))
 
-        data = [['Date','Category','Amount','Person','Description']]
+        data = [["Date","Category","Amount","Person","Description"]]
         for e in trip_expenses:
-            desc = e.get('description') or '-'
-            data.append([e['date'], e['category'], f"Rs.{float(e['amount']):,.2f}",
-                        e.get('person') or '-', desc[:50] + '...' if len(desc) > 50 else desc])
+            desc = e.get("description") or "-"
+            data.append([e["date"], e["category"], f"Rs.{float(e['amount']):,.2f}",
+                        e.get("person") or "-", desc[:50] + "..." if len(desc) > 50 else desc])
 
         table = Table(data, colWidths=[1*inch, 1.2*inch, 1*inch, 1*inch, 2.3*inch])
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e293b')),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('ALIGN', (0,0), (-1,0), 'CENTER'),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,0), 10),
-            ('BOTTOMPADDING', (0,0), (-1,0), 12),
-            ('BACKGROUND', (0,1), (-1,-1), colors.white),
-            ('FONTNAME', (0,1), (-1,-1), 'Helvetica'),
-            ('FONTSIZE', (0,1), (-1,-1), 9),
-            ('TOPPADDING', (0,1), (-1,-1), 8),
-            ('BOTTOMPADDING', (0,1), (-1,-1), 8),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e2e8f0')),
-            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#f8fafc')])
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1e293b")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.whitesmoke),
+            ("ALIGN", (0,0), (-1,0), "CENTER"),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE", (0,0), (-1,0), 10),
+            ("BOTTOMPADDING", (0,0), (-1,0), 12),
+            ("BACKGROUND", (0,1), (-1,-1), colors.white),
+            ("FONTNAME", (0,1), (-1,-1), "Helvetica"),
+            ("FONTSIZE", (0,1), (-1,-1), 9),
+            ("TOPPADDING", (0,1), (-1,-1), 8),
+            ("BOTTOMPADDING", (0,1), (-1,-1), 8),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#e2e8f0")),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f8fafc")])
         ]))
         elements.append(table)
         doc.build(elements)
         buffer.seek(0)
 
         filename = f"{trip['name'].replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
-        return send_file(buffer, mimetype='application/pdf', as_attachment=True, download_name=filename)
+        return send_file(buffer, mimetype="application/pdf", as_attachment=True, download_name=filename)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("Trip Expense Tracker Started!")
-    app.run(host='0.0.0.0', debug=False, port=5000)
+    app.run(host="0.0.0.0", debug=False, port=5000)
